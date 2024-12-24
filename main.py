@@ -1,27 +1,120 @@
 import youtube
+from datetime import date
+from pydantic import BaseModel, RootModel
+from fastapi import FastAPI, HTTPException, status
+from fastapi.responses import JSONResponse
+from typing import Dict, Any
+
+# FastAPI
+app = FastAPI()
+
+# Define a Pydantic model to validate the incoming data
+class URLRequest(BaseModel):
+    url: str
+
+class ChannelRequest(BaseModel):
+    metadata: Dict[str, Any]
 
 api_key = youtube.get_api_key()
 youtube_service = youtube.get_youtube(api_key)
 
-url = "https://www.youtube.com/@jjolatunji"
-channel_id = youtube.get_channel_id(youtube_service, url)
+@app.get("/")
+def index():
+    return {"message": "Hello from the server!"}
 
-def get_channel_info(youtube_service, channel_id):
-    channel_info = youtube.get_channel_details(youtube_service, channel_id)
+# API
+@app.post("/api/get_channel_info")
+async def get_channel_info(request: URLRequest):
+    url = request.url
 
-    uploads_playlist_id = channel_info["uploads_playlist_id"]
-    video_ids = youtube.get_video_ids(youtube_service, uploads_playlist_id)
+    if not url:
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"message": "URL is required."})
 
-    all_video_info = youtube.get_video_details(youtube_service, video_ids)
+    try:
+        # Call the get_channel_id function from your youtube helper module
+        channel_id = youtube.get_channel_id(url)
 
-    channel_info["uploads"] = all_video_info
+        channel_info = youtube.get_channel_details(channel_id)
 
-    return channel_info
+        # If successful, return the channel ID
+        return channel_info
 
-channel_info = get_channel_info(youtube_service, channel_id)
+    except ValueError as e:
+        # Return an error response with appropriate message if URL is invalid
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"message": str(e)})
+    except Exception as e:
+        # Handle any other unexpected errors
+        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"message": "An unexpected error occurred."})
 
-for key in channel_info:
-    if key == "uploads":
-        print (f'{key}: {len(channel_info["uploads"])}')
-    else:
-        print (f'{key} - {channel_info[key]}')
+
+# API to handle the POST request with channel data
+
+@app.post("/api/get_uploads")
+async def get_uploads(channel_request: ChannelRequest):
+    try:
+        # Access the metadata dictionary from the request
+        data = channel_request.metadata
+        
+        # Check if the required key exists in the metadata
+        if "uploads_playlist_id" not in data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The 'uploads_playlist_id' field is missing from the request data."
+            )
+
+        uploads_playlist_id = data["uploads_playlist_id"]
+
+        # Get video IDs using YouTube API function
+        try:
+            video_ids = youtube.get_video_ids(uploads_playlist_id)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error fetching video IDs: {str(e)}"
+            )
+
+        # Get video details using YouTube API function
+        try:
+            all_video_info = youtube.get_video_details(video_ids)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error fetching video details: {str(e)}"
+            )
+
+        # Preprocess video details
+        try:
+            all_video_info = youtube.preprocess_video_details(all_video_info)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error preprocessing video details: {str(e)}"
+            )
+
+        # Query video data by year
+        try:
+            all_video_info = youtube.query_data_by_year(all_video_info)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error querying video data by year: {str(e)}"
+            )
+
+        # Add the uploads data to the original metadata
+        data["uploads"] = all_video_info
+
+        return {"message": "Channel data received", "data": data}
+
+    except HTTPException as http_exc:
+        # Handle known HTTP exceptions and return the response
+        return JSONResponse(
+            status_code=http_exc.status_code,
+            content={"message": http_exc.detail}
+        )
+
+    except Exception as e:
+        # Handle unexpected errors
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"message": f"An unexpected error occurred: {str(e)}"}
+        )
