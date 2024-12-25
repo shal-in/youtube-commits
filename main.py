@@ -1,12 +1,17 @@
 import youtube
 from datetime import date
 from pydantic import BaseModel, RootModel
-from fastapi import FastAPI, HTTPException, status
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, status, Request
+from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 from typing import Dict, Any
 
 # FastAPI
 app = FastAPI()
+
+templates = Jinja2Templates(directory="templates")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Define a Pydantic model to validate the incoming data
 class URLRequest(BaseModel):
@@ -18,9 +23,11 @@ class ChannelRequest(BaseModel):
 api_key = youtube.get_api_key()
 youtube_service = youtube.get_youtube(api_key)
 
-@app.get("/")
-def index():
-    return {"message": "Hello from the server!"}
+
+@app.get("/", response_class=HTMLResponse)
+async def read_root(request: Request):
+    # Render the "index.html" template with context
+    return templates.TemplateResponse("index.html", {"request": request, "name": "FastAPI User"})
 
 # API
 @app.post("/api/get_channel_info")
